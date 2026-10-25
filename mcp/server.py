@@ -138,6 +138,36 @@ def _load_findings() -> list[dict[str, Any]]:
         return []
 
 
+def _title_tokens(title: str) -> set[str]:
+    import re
+
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", title.lower())
+        if len(token) > 3
+    }
+
+
+def _duplicate_of(title: str) -> str | None:
+    """Best-effort duplicate check: token-overlap with existing titles.
+
+    Deliberately blunt (cosine-free jaccard) so independent retries of the
+    same engagement do not silently multiply findings. Runs of a genuinely
+    new attack surface are rarely >50% token-identical.
+    """
+    probes = _title_tokens(title)
+    if not probes:
+        return None
+    for entry in _load_findings():
+        existing = _title_tokens(str(entry.get("title", "")))
+        if not existing:
+            continue
+        overlap = len(probes & existing) / len(probes | existing)
+        if overlap >= 0.5:
+            return str(entry.get("id"))
+    return None
+
+
 def _inside_path(path: str) -> str:
     """Normalize sandbox file paths into the /workspace tree."""
     if not path.startswith("/"):
@@ -350,9 +380,15 @@ async def report_finding(
 
     Every field should carry real observation: paste the actual
     request/response as evidence, not speculation. Returns the finding id
-    and the artifact path.
+    and the artifact path. Re-scans of the same surface are deduplicated:
+    a title that is >=50% token-identical to an existing finding returns
+    that finding's id instead of creating a new entry.
     """
     from strix.report.writer import atomic_write_text, render_vulnerability_md
+
+    dupe = _duplicate_of(title)
+    if dupe is not None:
+        return {"finding_id": dupe, "duplicate_of": dupe, "note": "already recorded"}
 
     global _FINDING_SEQ
     entries = _load_findings()
