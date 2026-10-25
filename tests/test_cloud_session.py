@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -154,6 +155,10 @@ def test_session_json_errors_preserve_machine_readable_server_details(capsys: An
     }
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits are not observable on Windows",
+)
 def test_cli_device_identity_is_stable_and_privacy_safe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

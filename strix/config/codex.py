@@ -117,13 +117,21 @@ def _refresh_guard() -> Iterator[None]:
         except (ImportError, OSError):
             yield
             return
+        # fcntl's members only exist on POSIX; on other platforms the module
+        # type-checks as empty, so they are read dynamically. Runtime behavior
+        # is unchanged wherever fcntl actually provides them.
+        flock = getattr(fcntl, "flock", None)
+        lock_ex = getattr(fcntl, "LOCK_EX", 0)
+        lock_un = getattr(fcntl, "LOCK_UN", 0)
         try:
             with contextlib.suppress(OSError):
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                if flock is not None:
+                    flock(handle.fileno(), lock_ex)
             yield
         finally:
             with contextlib.suppress(OSError):
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                if flock is not None:
+                    flock(handle.fileno(), lock_un)
             handle.close()
 
 

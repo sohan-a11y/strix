@@ -28,10 +28,11 @@ Target-specific workflows built on the same engine:
 - **Open-source CLI (self-hosted):** free, fully local, BYO LLM key, needs Docker. Best for local dev loops, air-gapped/offline, and full control.
   ```bash
   curl -sSL https://strix.ai/install | bash        # install
-  export STRIX_LLM="openrouter/z-ai/glm-5.3"        # any LiteLLM model id
-  export LLM_API_KEY="<key>"
+  strix setup                                      # one-time guided LLM setup
   strix -n -t ./ --scan-mode quick --max-budget 10  # headless scan; always use -n
   ```
+  - Or pass the model inline instead of `strix setup`: `--llm "openrouter/z-ai/glm-5.3" --api-key "<key>"` (a verified connection is cached for 7 days and skips the startup preflight).
+  - **Free-quota failover chain:** in `strix setup` (or a re-run when already configured) answer `y` to add sticky backups — e.g. TokenRouter.com (`--api-base https://api.tokenrouter.com/v1` via option 3) → Gemini free tier → Groq free tier. Every entry is key-preflighted and saved to `~/.strix/cli-config.json` as `STRIX_FALLBACK_LLMS`. Mid-scan, when a provider keeps rate-limiting (3 consecutive failures in 5 minutes) or dies on auth/billing, Strix switches to the next backup for the rest of the scan and prints the switch in the headless dashboard; `strix --resume` starts again at the primary. The scan only stops when every provider in the chain is exhausted — the stop log names the chain via `chain: ...`.
   - Requires Docker running. Scans take minutes (`quick`) to hours (`deep`) — run in the background.
   - Exit codes (headless): `0` clean, `1` fatal error, `2` vulnerabilities found. A `0` only covers what was analyzed — check `run.json` (`status`, `llm_usage.cost` vs the budget) before calling a run clean.
   - Artifacts in `strix_runs/<run-name>/`: `penetration_test_report.md`, `vulnerabilities/*.md`, `vulnerabilities.json`, `findings.sarif` (SARIF 2.1.0), `run.json`.

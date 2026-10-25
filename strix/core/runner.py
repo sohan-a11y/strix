@@ -50,6 +50,7 @@ from strix.core.inputs import (
 )
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.core.sessions import open_agent_session
+from strix.llm.provider_chain import describe_failover_chain, reset_failover_state
 from strix.report.state import get_global_report_state
 from strix.runtime import session_manager
 from strix.telemetry import set_scan_phase
@@ -136,6 +137,15 @@ def _note_exit_reason(reason: str) -> None:
     report_state = get_global_report_state()
     if report_state is not None and report_state.scan_ended_exit_reason is None:
         report_state.scan_ended_exit_reason = reason
+
+
+def _failover_chain_note() -> str:
+    """Append the provider chain to a rate-limit stop when a chain is configured."""
+    with contextlib.suppress(Exception):
+        chain = describe_failover_chain()
+        if chain:
+            return f" [{chain}]"
+    return ""
 
 
 def _persist_mcp_status(roster: list[dict[str, Any]]) -> None:
@@ -268,6 +278,10 @@ async def run_strix_scan(
     def report(phase: str) -> None:
         if status_sink is not None:
             status_sink(phase)
+
+    # A fresh scan (or resume) starts the failover chain over: exhaustion marks
+    # are per-process, and a resumed run should retry the primary first.
+    reset_failover_state()
 
     if scan_id is None:
         scan_id = f"scan-{uuid.uuid4().hex[:8]}"
@@ -679,10 +693,11 @@ async def run_strix_scan(
         return None
     except RateLimitError as exc:
         logger.warning(
-            "Scan %s stopped: persistent rate limit from the LLM provider (%s). "
+            "Scan %s stopped: persistent rate limit from the LLM provider (%s)%s. "
             "Resume with 'strix --resume %s' once the limit clears.",
             scan_id,
             exc,
+            _failover_chain_note(),
             scan_id,
         )
         _note_exit_reason("rate_limited")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import unicodedata
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -59,6 +60,37 @@ class ModelConnectionError(RuntimeError):
     def __init__(self, model_name: str, cause: BaseException) -> None:
         super().__init__(str(cause))
         self.model_name = model_name
+
+
+def llm_connection_fingerprint(settings: Settings) -> dict[str, str]:
+    """Describe the current model connection without ever storing the key.
+
+    Equals-across-calls means "the same provider connection", so a later run
+    may skip the preflight round-trip. The key is reduced to a short sha256,
+    and the header/body dicts to hashes of their sorted JSON, keeping the
+    record safe to persist next to the other settings.
+    """
+    import hashlib
+    import json
+
+    llm = settings.llm
+    raw_key = llm.api_key or os.environ.get("OPENAI_API_KEY") or ""
+    key_sha = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:16] if raw_key else ""
+
+    def _dict_sha(value: Any) -> str:
+        if not value:
+            return ""
+        encoded = json.dumps(value, sort_keys=True, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+
+    return {
+        "model": (llm.model or "").strip(),
+        "key_sha": key_sha,
+        "api_base": llm.api_base or "",
+        "api_type": llm.api_type or "",
+        "headers_sha": _dict_sha(llm.extra_headers),
+        "body_sha": _dict_sha(llm.extra_body),
+    }
 
 
 def _first_non_ascii(value: str) -> tuple[int, str] | None:

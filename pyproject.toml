@@ -249,8 +249,16 @@ ignore = [
 "tests/test_report_pdf.py" = ["S105", "S106"]
 # Fake MCP server matches the SDK's MCPServer signature; its args are unused.
 "tests/test_mcp_client.py" = ["S105", "S106", "ARG002"]
+# FakeConsole matches rich Console's prompt-taking signatures; args are unused.
+"tests/test_setup_wizard.py" = ["ARG002"]
 # MCP connection request in a test carries a dummy bearer token.
 "tests/test_runner_root_prompt.py" = ["S106"]
+# Deliberately lazy imports that avoid a circular dependency with
+# strix.config.models (which imports this module at startup).
+"strix/llm/provider_chain.py" = ["PLC0415"]
+# The consumed-events loop must record pre-exception events for the assert after
+# pytest.raises (extend-with-comprehension would silently discard them).
+"tests/test_provider_chain.py" = ["PERF401"]
 # Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
 # circular dependency with strix.telemetry / strix.interface.viewer.report_pdf.
 "strix/interface/viewer/server.py" = ["N802", "PLC0415"]
@@ -324,6 +332,8 @@ ignore = [
 # CLI / TUI / main keep extensive lazy imports + broad exception
 # swallows for resilience around terminal-rendering errors.
 "strix/interface/cli.py" = ["BLE001", "PLC0415"]
+"strix/interface/dashboard.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
+"strix/interface/setup_wizard.py" = ["BLE001", "PLC0415"]
 "strix/interface/scan_setup.py" = ["PLC0415"]
 "strix/interface/main.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]
 "strix/interface/cli_args.py" = ["BLE001", "PLC0415", "PLR0912", "PLR0915"]

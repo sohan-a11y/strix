@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,28 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 ApiType = Literal["responses", "chat_completions"]
 
 DEFAULT_MAX_TURNS = 500
+
+
+class LlmFallback(BaseModel):
+    """One backup provider behind the main model.
+
+    When the main connection hits a persistent provider wall (rate limit,
+    exhausted free quota, dead key), the scan switches to the first entry that
+    still answers. ``model`` is a LiteLLM-style id (``gemini/gemini-2.5-flash``,
+    ``groq/llama-3.3-70b-versatile``); ``api_key``/``api_base`` bind exactly that
+    provider. ``label`` is optional display text.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    model: str
+    api_key: str | None = Field(default=None, repr=False)
+    api_base: str | None = None
+    label: str | None = None
+
+    def display_name(self) -> str:
+        """Human-facing name used in logs and dashboard notices."""
+        return self.label or self.model
 
 
 def _lowercase(value: object) -> object:
@@ -97,6 +119,7 @@ class LlmSettings(BaseSettings):
         ge=0,
         alias="LLM_MAX_TOOL_CALLS_PER_TURN",
     )
+    fallbacks: list[LlmFallback] = Field(default_factory=list, alias="STRIX_FALLBACK_LLMS")
 
     @field_validator("api_type", "reasoning_effort", mode="before")
     @classmethod

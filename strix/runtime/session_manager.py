@@ -62,8 +62,13 @@ def _host_identity_env() -> dict[str, str]:
     if platform_name != "linux":
         return {}
     # Bind-mount ownership only needs mapping on Linux, where the container uid
-    # must match the host's.
-    return {"STRIX_HOST_UID": str(os.getuid()), "STRIX_HOST_GID": str(os.getgid())}
+    # must match the host's. os.getuid doesn't exist on every platform mypy
+    # checks on, so the attributes are read dynamically at runtime.
+    uid_getter = getattr(os, "getuid", None)
+    gid_getter = getattr(os, "getgid", None)
+    if uid_getter is None or gid_getter is None:
+        return {}
+    return {"STRIX_HOST_UID": str(uid_getter()), "STRIX_HOST_GID": str(gid_getter())}
 
 
 def build_bind_mounts(local_sources: list[dict[str, Any]]) -> list[dict[str, Any]]:

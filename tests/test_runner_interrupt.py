@@ -32,6 +32,8 @@ def _wire_runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
             extra_body=None,
         ),
         runtime=types.SimpleNamespace(max_context_images=3),
+        # Committed runner.py reads the telemetry knobs off settings.
+        telemetry=types.SimpleNamespace(run_record_timings=False),
     )
     monkeypatch.setattr(runner, "load_settings", lambda: settings)
     monkeypatch.setattr(runner, "configure_sdk_model_defaults", lambda _settings: None)

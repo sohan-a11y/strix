@@ -83,16 +83,34 @@ Strix are autonomous AI penetration testing agents that act just like real hacke
 # Install Strix
 curl -sSL https://strix.ai/install | bash
 
-# Configure your AI provider
-export STRIX_LLM="openrouter/z-ai/glm-5.3"
-export LLM_API_KEY="your-api-key"
+# One-time guided setup: pick a model, paste your key (masked), verify the
+# connection, and everything is saved for every future run
+strix setup
 
-# Run your first security assessment
-strix --target ./app-directory
+# Run your first security assessment — URL, directory, or code
+strix --target https://your-app.com
 ```
 
+No env exports or config files required: `strix setup` writes
+`~/.strix/cli-config.json`, and future scans are a single command. Prefer the
+explicit form (great for CI)? Set everything on the command line:
+
+```bash
+strix --target ./app-directory --llm "openrouter/z-ai/glm-5.3" --api-key "your-api-key"
+```
+
+While a scan runs, a live dashboard in your terminal shows every agent, what
+it is doing right now, the shared plan (steps remaining), findings as they
+are filed, and tokens/cost so far.
+
+Free-tier providers run out of quota mid-scan? Add a failover chain in the
+same `strix setup` pass (or re-run it): when the main provider hits a wall,
+Strix switches to the next backup automatically and keeps scanning. See
+[Free-quota failover chain](#free-quota-failover-chain) below.
+
 > [!NOTE]
-> First run automatically pulls the sandbox Docker image. Results are saved to `strix_runs/<run-name>`
+> First run automatically pulls the sandbox Docker image in the background
+> while verifying your LLM connection. Results are saved to `strix_runs/<run-name>`
 
 ### Updating
 
@@ -306,6 +324,32 @@ export LLM_API_BASE="your-api-base-url"  # if using a local model, e.g. Ollama, 
 > [!NOTE]
 > Strix automatically saves your configuration to `~/.strix/cli-config.json`, so you don't have to re-enter it on every run.
 > See the [configuration reference](https://docs.strix.ai/advanced/configuration) for every environment variable.
+
+#### Free-quota failover chain
+
+A scan can outlive a provider's free quota. Configure sticky failover backups
+so the scan continues on the next provider instead of stopping:
+
+```bash
+strix setup    # answer "y" to "Set up a failover chain?" and paste the backup keys
+```
+
+- Presets cover `gemini/gemini-2.5-flash` (AI Studio free tier) and
+  `groq/llama-3.3-70b-versatile` (Groq free tier); option 3 accepts any
+  OpenAI-compatible endpoint (custom base URL), e.g. `https://api.tokenrouter.com/v1`.
+- Every entry is verified with one real round-trip before it is saved; dead
+  keys are dropped.
+- A provider is switched away from when it keeps rate-limiting (3 consecutive
+  failures inside 5 minutes) or immediately on an auth/billing error. The
+  switch is sticky for the rest of the scan and the dashboard prints it live.
+- The chain resets on the next run, so the primary is retried first again.
+
+Equivalent env/config form (`STRIX_FALLBACK_LLMS`, saved to
+`~/.strix/cli-config.json` by the wizard):
+
+```bash
+export STRIX_FALLBACK_LLMS='[{"model": "gemini/gemini-2.5-flash", "api_key": "your-key"}, {"model": "groq/llama-3.3-70b-versatile", "api_key": "your-key"}]'
+```
 
 #### Sign in with a ChatGPT subscription
 

@@ -54,7 +54,10 @@ def _launch(
     monkeypatch.setattr(cli_main, "start_background_check", lambda: None)
     monkeypatch.setattr(cli_main, "prompt_update_if_available", lambda _console: False)
     monkeypatch.setattr(cli_main, "check_docker_installed", lambda: None)
-    monkeypatch.setattr(cli_main, "pull_docker_image", lambda: None)
+    # The sandbox image streams in the background during the preflight in the
+    # new boot flow; stub the pair out so the sandbox never talks to Docker.
+    monkeypatch.setattr(cli_main, "start_image_pull_background", lambda: None)
+    monkeypatch.setattr(cli_main, "finish_image_pull_background", lambda _pull: None)
     monkeypatch.setattr(cli_main, "validate_environment", lambda: None)
     monkeypatch.setattr(cli_main, "wait_for_import_warmup", lambda: None)
     monkeypatch.setattr(cli_main, "_bootstrap_scan", lambda _args: calls.append("bootstrap"))
@@ -129,7 +132,10 @@ def test_tui_startup_failure_marks_the_prepared_run_failed(monkeypatch: pytest.M
     monkeypatch.setattr(cli_main, "start_background_check", lambda: None)
     monkeypatch.setattr(cli_main, "prompt_update_if_available", lambda _console: False)
     monkeypatch.setattr(cli_main, "check_docker_installed", lambda: None)
-    monkeypatch.setattr(cli_main, "pull_docker_image", lambda: None)
+    # The sandbox image streams in the background during the preflight in the
+    # new boot flow; stub the pair out so the sandbox never talks to Docker.
+    monkeypatch.setattr(cli_main, "start_image_pull_background", lambda: None)
+    monkeypatch.setattr(cli_main, "finish_image_pull_background", lambda _pull: None)
     monkeypatch.setattr(cli_main, "validate_environment", lambda: None)
     monkeypatch.setattr(cli_main, "wait_for_import_warmup", lambda: None)
     monkeypatch.setattr(cli_main, "_bootstrap_scan", lambda _args: calls.append("bootstrap"))
@@ -267,7 +273,10 @@ def test_tui_process_dying_after_startup_prints_a_panel_instead_of_a_traceback(
     monkeypatch.setattr(cli_main, "start_background_check", lambda: None)
     monkeypatch.setattr(cli_main, "prompt_update_if_available", lambda _console: False)
     monkeypatch.setattr(cli_main, "check_docker_installed", lambda: None)
-    monkeypatch.setattr(cli_main, "pull_docker_image", lambda: None)
+    # The sandbox image streams in the background during the preflight in the
+    # new boot flow; stub the pair out so the sandbox never talks to Docker.
+    monkeypatch.setattr(cli_main, "start_image_pull_background", lambda: None)
+    monkeypatch.setattr(cli_main, "finish_image_pull_background", lambda _pull: None)
     monkeypatch.setattr(cli_main, "validate_environment", lambda: None)
     monkeypatch.setattr(cli_main, "wait_for_import_warmup", lambda: None)
     monkeypatch.setattr(cli_main, "_bootstrap_scan", lambda _args: calls.append("bootstrap"))

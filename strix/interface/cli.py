@@ -1,10 +1,9 @@
+import asyncio
 import atexit
 import contextlib
 import logging
 import signal
 import sys
-import threading
-import time
 from typing import Any
 
 from rich.console import Console
@@ -14,19 +13,24 @@ from rich.text import Text
 
 from strix.config import load_settings
 from strix.config.settings import DEFAULT_MAX_TURNS
+from strix.core.agents import AgentCoordinator
 from strix.core.runner import run_strix_scan
+from strix.interface.dashboard import DashboardState, StrixDashboard
+from strix.interface.tui.live_view import TuiLiveView
+from strix.llm.provider_chain import add_provider_switch_listener
 from strix.report.state import ReportState, set_global_report_state
 from strix.runtime import session_manager
+from strix.tools.todo.tools import snapshot_all_todos
 
-from .utils import (
-    build_live_stats_text,
-    format_vulnerability_report,
-    has_model_response,
-    read_workspace_files,
-)
+from .utils import format_vulnerability_report, read_workspace_files
 
 
 logger = logging.getLogger(__name__)
+
+# Live dashboard refresh/poll cadence: the renderable redraws itself from
+# DashboardState at this rate, and the graph/todo poller refreshes that state.
+DASHBOARD_REFRESH_HZ = 4
+GRAPH_POLL_SECONDS = 0.5
 
 
 def _resolve_sandbox_image() -> str:
@@ -36,6 +40,23 @@ def _resolve_sandbox_image() -> str:
             "strix_image is not configured. Set it in ~/.strix/cli-config.json.",
         )
     return image
+
+
+def _dashboard_model(model: str | None) -> str:
+    resolved = str(model or "").strip()
+    if resolved:
+        return resolved
+    with contextlib.suppress(Exception):
+        resolved = str(load_settings().llm.model or "").strip()
+    return resolved or "unknown"
+
+
+def _dashboard_targets(targets_info: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(info.get("original") or "").strip()
+        for info in targets_info or []
+        if str(info.get("original") or "").strip()
+    ]
 
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
@@ -62,7 +83,10 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     note_text = Text()
     note_text.append("\n\n", style="dim")
-    note_text.append("Vulnerabilities will be displayed in real-time.", style="dim")
+    note_text.append(
+        "Live dashboard follows: agent activity, plan, findings, spend.",
+        style="dim",
+    )
 
     startup_panel = Panel(
         Text.assemble(
@@ -84,6 +108,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console.print()
 
     scan_mode = getattr(args, "scan_mode", "deep")
+    max_turns = getattr(args, "max_turns", DEFAULT_MAX_TURNS)
 
     scan_config: dict[str, Any] = {
         "scan_id": args.run_name,
@@ -164,51 +189,91 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     set_global_report_state(report_state)
 
-    startup_phase: list[str] = ["Starting up"]
+    # -- live dashboard wiring ------------------------------------------------
+    # OneBidirectional feed of everything already pushed by the engine:
+    # graph/todo snapshots polled from the coordinator (its own instance is
+    # handed to run_strix_scan below), SDK stream events folded through the
+    # same TuiLiveView projection the TUI uses, startup phases and the MCP
+    # roster arriving through their engine sinks.
+    dashboard_state = DashboardState(
+        run_name=args.run_name,
+        targets=_dashboard_targets(args.targets_info),
+        model=_dashboard_model(getattr(args, "llm", None)),
+        max_turns=max_turns,
+        max_budget_usd=getattr(args, "max_budget_usd", None),
+    )
+    dashboard = StrixDashboard(dashboard_state, report_state)
+    live_view = TuiLiveView()
+    coordinator = AgentCoordinator()
+    live_view.set_user_instruction(str(scan_config.get("user_instructions") or ""))
+    _error_noted_agents: set[str] = set()
 
-    def create_live_status() -> Panel:
-        status_text = Text()
-        status_text.append("Penetration test in progress", style="bold #22c55e")
-        status_text.append("\n\n")
-
-        if not has_model_response(report_state):
-            status_text.append(f"{startup_phase[0]}...", style="dim")
-            status_text.append("\n\n")
-
-        stats_text = build_live_stats_text(report_state)
-        if stats_text:
-            status_text.append(stats_text)
-
-        return Panel(
-            status_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="#22c55e",
-            padding=(1, 2),
+    def on_provider_switched(from_label: str, to_label: str, reason: str) -> None:
+        # The dashboard status line tracks phases through note_phase; the
+        # switch also surfaces inline so it is visible between refreshes.
+        dashboard_state.note_phase(f"llm provider → {to_label}")
+        console.print(
+            f"\n[bold yellow]LLM provider switch:[/] [white]{from_label}[/] is out of "
+            f"quota ({reason}); continuing on [cyan]{to_label}[/]\n"
         )
 
-    def _note_startup_phase(phase: str) -> None:
-        startup_phase[:] = [phase]
+    add_provider_switch_listener(on_provider_switched)
+
+    run_dir = report_state.get_run_dir()
+    if (run_dir / ".state" / "agents.json").exists():
+        # Resuming: replay the prior run's recent SDK history so the activity
+        # feed and per-agent cells do not start blank.
+        live_view.hydrate_from_run_dir(run_dir)
+
+    def on_scan_event(agent_id: str, event: Any) -> None:
+        try:
+            live_view.ingest_sdk_event(agent_id, event)
+            dashboard_state.drain_live_view(live_view)
+        except Exception:
+            logger.debug("dashboard event absorption failed", exc_info=True)
+
+    def on_mcp_status(roster: list[dict[str, Any]]) -> None:
+        dashboard_state.note_mcp_roster(roster)
+
+    async def poll_graph_and_todos() -> None:
+        while True:
+            try:
+                parent_of, statuses, names, errors = await coordinator.graph_snapshot()
+                dashboard_state.update_graph(parent_of, statuses, names, errors)
+                dashboard_state.update_todos(snapshot_all_todos())
+                for agent_id, status in statuses.items():
+                    live_view.upsert_agent(
+                        agent_id,
+                        name=names.get(agent_id, agent_id),
+                        parent_id=parent_of.get(agent_id),
+                        status=str(status),
+                        error_message=errors.get(agent_id),
+                    )
+                    error = errors.get(agent_id)
+                    if status in {"failed", "crashed"} and error:
+                        if agent_id not in _error_noted_agents:
+                            _error_noted_agents.add(agent_id)
+                            live_view.record_agent_error(agent_id, error)
+                    else:
+                        _error_noted_agents.discard(agent_id)
+                live_view.flush_user_instruction()
+                dashboard_state.drain_live_view(live_view)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("dashboard poll failed", exc_info=True)
+            await asyncio.sleep(GRAPH_POLL_SECONDS)
 
     try:
         console.print()
 
         with Live(
-            create_live_status(), console=console, refresh_per_second=2, transient=False
-        ) as live:
-            stop_updates = threading.Event()
-
-            def update_status() -> None:
-                while not stop_updates.is_set():
-                    try:
-                        live.update(create_live_status())
-                        time.sleep(2)
-                    except Exception:
-                        break
-
-            update_thread = threading.Thread(target=update_status, daemon=True)
-            update_thread.start()
-
+            dashboard,
+            console=console,
+            refresh_per_second=DASHBOARD_REFRESH_HZ,
+            transient=False,
+        ):
+            poll_task = asyncio.create_task(poll_graph_and_todos())
             try:
                 logger.info(
                     "CLI launching scan: run_name=%s targets=%d interactive=%s",
@@ -222,14 +287,18 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
                     image=_resolve_sandbox_image(),
                     local_sources=getattr(args, "local_sources", None) or [],
                     extra_files=read_workspace_files(getattr(args, "workspace_files", None)),
+                    coordinator=coordinator,
                     interactive=bool(getattr(args, "interactive", False)),
                     max_budget_usd=getattr(args, "max_budget_usd", None),
-                    max_turns=getattr(args, "max_turns", DEFAULT_MAX_TURNS),
-                    status_sink=_note_startup_phase,
+                    max_turns=max_turns,
+                    status_sink=dashboard_state.note_phase,
+                    event_sink=on_scan_event,
+                    mcp_status_sink=on_mcp_status,
                 )
             finally:
-                stop_updates.set()
-                update_thread.join(timeout=1)
+                poll_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poll_task
                 with contextlib.suppress(Exception):
                     await session_manager.cleanup(args.run_name)
 

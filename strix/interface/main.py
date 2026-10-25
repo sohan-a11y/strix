@@ -27,7 +27,8 @@ from strix.interface.cli_args import (
 )
 from strix.interface.environment import (
     check_docker_installed,
-    pull_docker_image,
+    finish_image_pull_background,
+    start_image_pull_background,
     validate_environment,
 )
 from strix.interface.interactive import (
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 
 _ROOT_SUBCOMMAND_HELP = """
 Additional commands:
+  strix setup              Configure and verify an LLM connection once (first run)
   strix cloud ...          Use the managed Strix platform
   strix auth ...           Manage model-subscription sign-in
   strix view [RUN]         View a completed or running scan
@@ -106,6 +108,63 @@ def _subscription_error_hint(exc: BaseException) -> str | None:
             "  strix auth login chatgpt"
         )
     return None
+
+
+# A verified connection may skip the preflight round-trip for this long before
+# it is re-checked; keeps a revoked or expired key from hiding for years.
+_VERIFICATION_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+
+def _skip_preflight_when_still_verified(model: str) -> bool:
+    """Whether this exact connection was verified recently on an earlier run.
+
+    ChatGPT-subscription tokens rotate, so those always preflight. Everything
+    else is checked against the fingerprint recorded beside the saved config;
+    a model or key change invalidates it, and so does age past the TTL.
+    """
+    import time as _time
+
+    from strix.config import codex
+    from strix.config.loader import read_verified_llm_connection
+    from strix.interface.scan_setup import llm_connection_fingerprint
+
+    if codex.subscription_model(model):
+        return False
+    cached = read_verified_llm_connection()
+    if not cached:
+        return False
+    verified_at = cached.get("verified_at")
+    if not isinstance(verified_at, str):
+        return False
+    try:
+        age = _time.time() - float(verified_at)
+    except ValueError:
+        return False
+    if age < 0 or age > _VERIFICATION_MAX_AGE_SECONDS:
+        return False
+    settings = load_settings()
+    expected = llm_connection_fingerprint(settings)
+    # Extra cached keys (verified_at) don't participate: every connection field
+    # the fingerprint produces must be equal.
+    return all(cached.get(key) == value for key, value in expected.items())
+
+
+def _remember_verified_connection() -> None:
+    import time as _time
+
+    from strix.config import codex
+    from strix.config.loader import store_verified_llm_connection
+    from strix.interface.scan_setup import llm_connection_fingerprint
+
+    settings = load_settings()
+    if codex.subscription_model(settings.llm.model):
+        return
+    fingerprint = llm_connection_fingerprint(settings)
+    fingerprint["verified_at"] = repr(_time.time())  # one float, safe to parse back
+    try:
+        store_verified_llm_connection(fingerprint)
+    except Exception:
+        logger.exception("storing the verified connection fingerprint failed")
 
 
 async def warm_up_llm() -> None:
@@ -154,8 +213,15 @@ async def warm_up_llm() -> None:
             )
             sys.exit(1)
 
-        await preflight_model_connection(raw_model, settings=settings)
-        logger.info("LLM warm-up succeeded for model %s", (llm.model or "").strip())
+        if raw_model and _skip_preflight_when_still_verified(raw_model):
+            logger.info(
+                "LLM connection verified since last run; skipping preflight for %s",
+                raw_model,
+            )
+        else:
+            await preflight_model_connection(raw_model, settings=settings)
+            _remember_verified_connection()
+        logger.info("LLM warm-up succeeded for model %s", raw_model)
 
         if settings.dedupe.model:
             from strix.report.dedupe import resolve_dedupe_model
@@ -181,6 +247,9 @@ async def warm_up_llm() -> None:
         raise
     except Exception as exc:
         logger.debug("LLM warm-up failed", exc_info=True)
+        from strix.config.loader import clear_verified_llm_connection
+
+        clear_verified_llm_connection()  # an unverified connection must re-check next run
         raise ModelConnectionError(raw_model, exc) from exc
 
 
@@ -456,6 +525,13 @@ def main() -> None:
 
         sys.exit(run_auth(sys.argv[2:]))
 
+    # `strix setup …` configures and verifies an LLM connection once so later
+    # runs are a single command; it needs no target, Docker, or scan setup.
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        from strix.interface.setup_wizard import run_setup_command
+
+        sys.exit(run_setup_command())
+
     # Generate native shell completion scripts before scan argument parsing.
     if len(sys.argv) > 1 and sys.argv[1] in ("completion", "completions"):
         from strix.interface.completions import run_completions
@@ -484,14 +560,21 @@ def main() -> None:
         _pick_run_to_resume(args)
 
     check_docker_installed()
-    pull_docker_image()
     validate_environment()
+
+    # Once the configuration is settled, the sandbox image pull streams in the
+    # background while the import warm-up and the model preflight run, so the
+    # three slow setup steps overlap instead of queueing.
+    boots_a_scan = args.non_interactive or not args.needs_setup
+    image_pull = start_image_pull_background() if boots_a_scan else None
 
     # Everything below imports the scan engine; do not race the warm-up thread.
     wait_for_import_warmup()
 
-    if args.non_interactive or not args.needs_setup:
+    if boots_a_scan:
         _bootstrap_scan(args)
+
+    finish_image_pull_background(image_pull)
 
     from strix.report.state import get_global_report_state
 

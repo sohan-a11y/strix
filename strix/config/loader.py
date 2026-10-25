@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 from types import UnionType
-from typing import TYPE_CHECKING, Any, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Union, cast, get_args, get_origin
 
 from pydantic import AliasChoices, BaseModel
 
@@ -59,6 +59,85 @@ def apply_config_override(path: Path) -> None:
     _override = path
     _cached = None
     logger.info("config override applied: %s", path)
+
+
+def reset_settings_cache() -> None:
+    """Forget the memoized settings so the next ``load_settings`` re-resolves.
+
+    Used after new values are placed in the process environment (the setup
+    wizard) without touching the config file path.
+    """
+    global _cached  # noqa: PLW0603
+    _cached = None
+
+
+# Verified-connection record stored in the config file's ``env`` block under a
+# pseudo-variable name. It holds a fingerprint of the model connection (the API
+# key only as a sha256), never the key itself, so a later preflight can be
+# skipped when nothing about the connection changed.
+_VERIFIED_CONNECTION_KEY = "STRIX_VERIFIED_LLM"
+_FALLBACKS_KEY = "STRIX_FALLBACK_LLMS"
+
+
+def _config_path() -> Path:
+    return _override or _DEFAULT_PATH
+
+
+def read_verified_llm_connection() -> dict[str, Any] | None:
+    """Return the previously verified connection fingerprint, if well-formed."""
+    path = _config_path()
+    if not path.exists():
+        return None
+    env_block = _read_env_block(path)
+    raw = env_block.get(_VERIFIED_CONNECTION_KEY)
+    if isinstance(raw, str):
+        try:
+            data: object = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(data, dict):
+            return cast("dict[str, Any]", data)
+    return None
+
+
+def store_verified_llm_connection(payload: dict[str, Any]) -> None:
+    """Record a successfully verified connection fingerprint in the config file."""
+    target = _config_path()
+    env_block = _read_env_block(target)
+    env_block[_VERIFIED_CONNECTION_KEY] = json.dumps(payload)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_secret_text(target, json.dumps({"env": env_block}, indent=2))
+    logger.debug("stored verified LLM connection fingerprint")
+
+
+def save_llm_fallbacks(entries: list[dict[str, Any]]) -> None:
+    """Persist the failover chain as the ``STRIX_FALLBACK_LLMS`` config value.
+
+    Each entry is a ``LlmFallback``-shaped dict (``model``, ``api_key``,
+    ``api_base``, ``label``). An empty list clears the stored chain.
+    """
+    target = _config_path()
+    env_block = _read_env_block(target)
+    if entries:
+        env_block[_FALLBACKS_KEY] = json.dumps(entries)
+    else:
+        env_block.pop(_FALLBACKS_KEY, None)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_secret_text(target, json.dumps({"env": env_block}, indent=2))
+    logger.debug("stored %d LLM failover entr(y/ies)", len(entries))
+
+
+def clear_verified_llm_connection() -> None:
+    """Drop the verified-connection record; an expired or revoked key re-verifies."""
+    target = _config_path()
+    if not target.exists():
+        return
+    env_block = _read_env_block(target)
+    if _VERIFIED_CONNECTION_KEY not in env_block:
+        return
+    env_block.pop(_VERIFIED_CONNECTION_KEY, None)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_secret_text(target, json.dumps({"env": env_block}, indent=2))
 
 
 def persist_current() -> None:
@@ -135,13 +214,14 @@ def _read_json_overrides(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _decode_saved_value(finfo: FieldInfo, value: Any) -> Any:
-    """Decode a JSON string saved for a dict field, as pydantic does for env vars.
+    """Decode a JSON string saved for a structured field, as pydantic does for env vars.
 
-    ``persist_current`` saves env values verbatim, so a dict setting such as
-    ``LLM_EXTRA_HEADERS`` lands in the file as JSON text. Values that are
-    already objects, or aren't valid JSON, are left for validation to judge.
+    ``persist_current`` saves env values verbatim, so dict/list settings such as
+    ``LLM_EXTRA_HEADERS`` or ``STRIX_FALLBACK_LLMS`` land in the file as JSON
+    text. Values that are already objects, or aren't valid JSON, are left for
+    validation to judge.
     """
-    if not isinstance(value, str) or not _is_dict_field(finfo):
+    if not isinstance(value, str) or not (_is_mapping_field(finfo) or _is_sequence_field(finfo)):
         return value
     try:
         return json.loads(value)
@@ -149,12 +229,20 @@ def _decode_saved_value(finfo: FieldInfo, value: Any) -> Any:
         return value
 
 
-def _is_dict_field(finfo: FieldInfo) -> bool:
+def _is_mapping_field(finfo: FieldInfo) -> bool:
+    return _origin_in_annotations(finfo, dict)
+
+
+def _is_sequence_field(finfo: FieldInfo) -> bool:
+    return _origin_in_annotations(finfo, list)
+
+
+def _origin_in_annotations(finfo: FieldInfo, origin: type) -> bool:
     annotation = finfo.annotation
     candidates = (
         get_args(annotation) if get_origin(annotation) in (Union, UnionType) else (annotation,)
     )
-    return any(c is dict or get_origin(c) is dict for c in candidates)
+    return any(get_origin(candidate) is origin or candidate is origin for candidate in candidates)
 
 
 def _first_alias_value(aliases: list[str], source: Mapping[str, Any]) -> Any | None:

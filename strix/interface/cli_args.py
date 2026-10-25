@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from strix.config import apply_config_override
+from strix.config.loader import reset_settings_cache
 from strix.config.settings import DEFAULT_MAX_TURNS
 from strix.core.paths import RUNS_DIR_NAME, run_dir_for, runtime_state_dir
 from strix.interface.scan_setup import attach_workspace_mount, build_targets_info
@@ -250,6 +251,40 @@ Strix Cloud:
     )
 
     parser.add_argument(
+        "--llm",
+        dest="llm",
+        type=str,
+        help=(
+            "Model to use for this run (e.g., 'openrouter/z-ai/glm-5.3' or "
+            "'anthropic/claude-opus-4-7'). Overrides STRIX_LLM and the saved "
+            "configuration. Passing this plus --api-key makes a scan fully "
+            "self-contained: strix -t <target> --llm <model> --api-key <key>"
+        ),
+    )
+
+    parser.add_argument(
+        "--api-key",
+        dest="api_key",
+        metavar="KEY",
+        type=str,
+        help=(
+            "LLM API key for this run; overrides LLM_API_KEY. Kept secret within "
+            "the process and persisted to the 0600 ~/.strix/cli-config.json like "
+            "an exported key. Prefer the environment or 'strix setup' in CI logs."
+        ),
+    )
+
+    parser.add_argument(
+        "--api-base",
+        dest="api_base",
+        type=str,
+        help=(
+            "Custom LLM API base URL for this run (e.g., a local Ollama or "
+            "vLLM endpoint); overrides LLM_API_BASE."
+        ),
+    )
+
+    parser.add_argument(
         "--mcp-config",
         type=str,
         metavar="PATH",
@@ -325,6 +360,18 @@ Strix Cloud:
 
     if args.config:
         apply_config_override(validate_config_file(args.config))
+
+    # Self-contained single-step runs: the flags beat the environment file
+    # because they land as env vars first (the loader's env > file precedence).
+    overridden = args.llm is not None or args.api_key is not None or args.api_base is not None
+    if overridden:
+        if args.llm is not None:
+            os.environ["STRIX_LLM"] = args.llm.strip() if args.llm.strip() else ""
+        if args.api_key is not None:
+            os.environ["LLM_API_KEY"] = args.api_key
+        if args.api_base is not None:
+            os.environ["LLM_API_BASE"] = args.api_base
+        reset_settings_cache()
 
     if args.mcp_config:
         mcp_config_path = Path(args.mcp_config).expanduser()

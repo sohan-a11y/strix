@@ -45,6 +45,7 @@ from strix.config.tool_call_arguments import repair_input
 from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
 from strix.config.tool_call_limits import TurnToolCallLimiter
 from strix.llm import request_log
+from strix.llm.provider_chain import wrap_with_failover
 
 
 if TYPE_CHECKING:
@@ -575,6 +576,7 @@ class StrixProvider(MultiProvider):
         *,
         api_key: str | None = None,
         base_url: str | None = None,
+        enable_failover: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -587,6 +589,7 @@ class StrixProvider(MultiProvider):
         )
         self._override_api_key = api_key
         self._override_base_url = base_url
+        self._failover_disabled = bool(api_key or base_url) or not enable_failover
 
     def _create_fallback_provider(self, prefix: str) -> ModelProvider:
         if prefix == "litellm" and (self._override_api_key or self._override_base_url):
@@ -613,6 +616,7 @@ class StrixProvider(MultiProvider):
     def get_model(self, model_name: str | None) -> Model:
         llm = load_settings().llm
         slug = codex.subscription_model(model_name)
+        resolved_name = model_name or llm.model or "unknown"
         # The settings use 0 for no bound.
         idle_timeout = float(llm.stream_idle_timeout) or None
         first_event_timeout = float(llm.stream_first_event_timeout) or None
@@ -633,7 +637,6 @@ class StrixProvider(MultiProvider):
             )
         else:
             model = super().get_model(model_name)
-            resolved_name = model_name or llm.model or "unknown"
             if _routes_via_litellm(model):
                 # LiteLLM's callbacks log every reply; only a cancelled attempt
                 # (stream idle timeout, abandoned turn) escapes them.
@@ -658,13 +661,16 @@ class StrixProvider(MultiProvider):
                 # is done, so an idle gap is meaningless here; the request
                 # timeout bounds it instead.
                 idle_timeout = first_event_timeout = total_timeout = None
-        return _TurnGuardModel(
+        guarded = _TurnGuardModel(
             model,
             max_tool_calls_per_turn=llm.max_tool_calls_per_turn,
             stream_idle_timeout=idle_timeout,
             first_event_timeout=first_event_timeout,
             total_timeout=total_timeout,
         )
+        if llm.fallbacks and not self._failover_disabled:
+            return wrap_with_failover(guarded, model_name=resolved_name, llm=llm)
+        return guarded
 
 
 def _routes_via_litellm(model: Model) -> bool:

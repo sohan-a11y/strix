@@ -131,6 +131,24 @@ def _sorted_todos(agent_id: str) -> list[dict[str, Any]]:
     return todos_list
 
 
+def snapshot_all_todos() -> dict[str, list[tuple[str, str]]]:
+    """Read-only cross-agent snapshot for interfaces: {agent_id: [(status, title)]}.
+
+    Sorted per agent by status then priority (same ordering ``list_todos``
+    uses). Mirrors only what a live dashboard needs: no ids, timestamps, or
+    descriptions. Safe to call from the UI thread while agent tools mutate.
+    """
+    with _todos_io_lock:
+        return {
+            agent_id: [
+                (str(todo.get("status") or "pending"), str(todo.get("title") or ""))
+                for todo in sorted(by_id.values(), key=_todo_sort_key)
+            ]
+            for agent_id, by_id in _todos_storage.items()
+            if by_id
+        }
+
+
 def _normalize_todo_ids(raw_ids: Any) -> list[str]:
     if raw_ids is None:
         return []
