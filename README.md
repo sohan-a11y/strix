@@ -71,6 +71,60 @@ Strix are autonomous AI penetration testing agents that act just like real hacke
 - **Bug Bounty Automation** - Automate bug bounty research and generate PoCs for faster reporting
 - **CI/CD Integration** - Run tests in CI/CD to block vulnerabilities before reaching production
 
+## 🤖 Agentic Mode (OpenCode — no LLM keys for Strix)
+
+Run Strix's full pentest muscle directly out of [OpenCode](https://opencode.ai): the OpenCode agent
+(the model you already configured there) becomes the pentest brain, and Strix's Kali sandbox is
+exposed as its hands over MCP. **Strix itself needs zero API keys** — `nmap`, `sqlmap`, `ffuf`,
+`chromium` and friends run in the sandbox container, driven by plain MCP tool calls.
+
+### One-command setup
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1 -SeedTestSite
+```
+
+That script verifies Docker, creates the Python venv, pulls the sandbox image
+(`ghcr.io/usestrix/strix-sandbox`), registers the MCP server in the project's `opencode.json`,
+and (with `-SeedTestSite`) starts a legal local pentest target (OWASP Juice Shop) on
+<http://localhost:4321>.
+
+### Run a scan
+
+Open this folder in OpenCode and type:
+
+```
+/runscan http://localhost:4321
+```
+
+The `pentest` agent (`.opencode/agents/pentest.md`) will:
+
+1. health-check the sandbox (`strix_sandbox_health`),
+2. recon + map the target (`strix_sandbox_exec`: nmap, curl, httpx, katana...),
+3. **create its own account** through the real UI (`strix_browser` → Chromium) if the app
+   requires one, using throwaway credentials,
+4. probe for vulnerabilities, capture evidence, and record each finding with
+   `strix_report_finding`,
+5. write `strix_runs/runscan-*/penetration_test_report.md` and hand you a summary.
+
+Point it at your own site only when you are authorized to test it.
+
+### How the pieces fit
+
+```
+OpenCode agent (your selected model)          this repo / MCP          Docker
+─────────────────────────────────            ───────────────          ──────
+/runscan <target>  ─►  pentest agent  ─►  strix_sandbox_exec ─►  Kali sandbox container
+                        (brain, no keys)  strix_browser            (nmap, sqlmap, chromium,
+                                          strix_report_finding      Caido proxy...)
+                                          strix_finish_report  ─►  strix_runs/runscan-*/report.md
+```
+
+Files: `mcp/server.py` (the MCP stdio server — tools: `sandbox_health`, `sandbox_exec`,
+`sandbox_write_file`, `sandbox_read_file`, `browser`, `report_finding`, `finish_report`,
+`sandbox_stop`), `.opencode/agents/pentest.md` (the brain), `.opencode/commands/runscan.md`
+(the slash command), `mcp/smoke_test.py` (transport smoke test).
+
 ## 🚀 Quick Start
 
 **Prerequisites:**
