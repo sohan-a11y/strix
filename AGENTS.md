@@ -23,7 +23,16 @@ Target-specific workflows built on the same engine:
 - `owasp-top-10-testing` — systematic OWASP Top 10 assessment with honest per-category coverage
 - `find-security-vulnerabilities-in-code` — white-box review of a repo or working tree
 
-**Two ways to run, same engine — pick per situation:**
+**Three ways to run, same engine — pick per situation:**
+
+- **Agentic Mode (Google Antigravity & OpenCode):** zero LLM keys needed for Strix. The coding agent (Gemini in Antigravity or your selected model in OpenCode) acts as the brain driving the Kali sandbox container via MCP.
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File setup.ps1 -SeedTestSite
+  ```
+  - In **Google Antigravity IDE**: configured via `.agents/skills/runscan/SKILL.md`, `.agents/mcp_config.json`, and `.agents/rules/strix-pentest.md`.
+  - In **OpenCode**: configured via `.opencode/agents/pentest.md` plus the `.opencode/agents/strix-*.md` specialist subagents (recon, web, API, validation, report), `.opencode/commands/runscan.md`, and `opencode.json`.
+  - Simply run `/runscan <target-url>` in either IDE to trigger an autonomous pentest. For CI or a terminal, `scripts/runscan-agent.ps1` / `scripts/runscan-agent.sh` run the same agent headlessly through `opencode run --agent pentest --auto`.
+  - The MCP server exposes the engine's full deterministic surface (sandbox, browser, Caido proxy, 65 skills, notes, todos, coverage ledger, threat model, findings and canonical artifacts) — see `docs/integrations/agentic-mode.mdx` for the parity matrix and the host-owned remainder.
 
 - **Open-source CLI (self-hosted):** free, fully local, BYO LLM key, needs Docker. Best for local dev loops, air-gapped/offline, and full control.
   ```bash

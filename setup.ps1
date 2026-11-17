@@ -1,6 +1,6 @@
 # Strix Agentic - one-command setup
 # Usage:
-#   powershell -ExecutionPolicy Bypass -File setup.ps1                  # bind to OpenCode (project config)
+#   powershell -ExecutionPolicy Bypass -File setup.ps1                  # bind to Antigravity & OpenCode
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -SeedTestSite    # also start the local Juice Shop test site
 #   powershell -ExecutionPolicy Bypass -File setup.ps1 -SkipPull        # skip sandbox image pull
 param(
@@ -65,9 +65,9 @@ if (-not $present) {
 }
 if ($present) { Good "Sandbox image present: $sandboxImage" }
 
-# -------------------------------------------------- 4) Register MCP server with OpenCode
-& $venvPy (Join-Path $root "mcp\install_mcp.py")
-Good "OpenCode config updated (opencode.json in repo root)"
+# -------------------------------------------------- 4) Register MCP server with OpenCode & Antigravity
+& $venvPy (Join-Path $root "mcp\install_mcp.py") --target all
+Good "Agent configs updated (opencode.json and .agents/mcp_config.json in repo root)"
 
 # -------------------------------------------------- 5) Optional: local test site
 if ($SeedTestSite) {
@@ -96,11 +96,14 @@ if ($SeedTestSite) {
 Write-Host ""
 Good "Setup complete."
 Write-Host ""
-Write-Host "  1) Open this folder in OpenCode"
-Write-Host "  2) Type:  /runscan <target-url>" -ForegroundColor Cyan
+Write-Host "  To run scans:"
+Write-Host "  * Google Antigravity: Open this folder in Antigravity IDE and type:"
+Write-Host "      /runscan <target-url>" -ForegroundColor Cyan
+Write-Host "  * OpenCode: Open this folder in OpenCode and type:"
+Write-Host "      /runscan <target-url>" -ForegroundColor Cyan
 $useTarget = "use your own site (must be authorized), or the seeded test site"
 if ($SeedTestSite) { $useTarget = "http://localhost:$TestSitePort" }
 Write-Host "     example: /runscan $useTarget"
 Write-Host ""
-Write-Host "  No API keys: the pentest brain is the model you selected in OpenCode;"
+Write-Host "  No API keys: the pentest brain is the model you selected in Antigravity or OpenCode;"
 Write-Host "  the muscle (nmap/sqlmap/chromium/...) runs in the strix sandbox container."

@@ -50,6 +50,7 @@
               "integrations/github-actions",
               "integrations/ci-cd",
               "integrations/coding-agents",
+              "integrations/agentic-mode",
               "integrations/mcp"
             ]
           },

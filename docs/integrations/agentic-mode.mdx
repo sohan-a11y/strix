@@ -1,0 +1,223 @@
+---
+title: "Agentic Mode (MCP)"
+description: "Run the Strix engine from your coding agent with no Strix LLM key"
+---
+
+Agentic mode exposes Strix's deterministic engine over MCP and lets the model
+you already run — Claude Code, OpenCode, Antigravity, Cursor, or any MCP
+client — be the pentest brain. Strix itself makes no model API calls, so it
+needs **no LLM key**. The sandbox, proxy, browser, skills, coverage ledger,
+notes, threat model, findings and report writers are the shipped engine code.
+
+```text
+coding agent (model you already pay for)
+        │  MCP stdio: 37 strix_* tools
+        ▼
+mcp/server.py  ──►  strix.runtime / strix.tools.* / strix.report.*
+        │
+        ▼
+Kali sandbox container (nmap, sqlmap, ffuf, chromium, Caido)
+```
+
+## Requirements
+
+- Docker running, with the sandbox image pulled (`setup.ps1` does both).
+- The repo's Python venv (`.venv`) — the server imports the installed engine.
+- An MCP-capable agent. This repository ships the agent definitions for
+  OpenCode, and the server works with any stdio MCP client.
+
+## Setup
+
+`setup.ps1` creates the venv, pulls the image, and registers the server. To do
+it by hand, register the stdio server with your agent.
+
+For OpenCode, `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "strix": {
+        "type": "local",
+        "command": [
+          "C:\\path\\to\\repo\\.venv\\Scripts\\python.exe",
+          "C:\\path\\to\\repo\\mcp\\server.py"
+        ],
+        "cwd": "C:\\path\\to\\repo",
+        "codemode": false,
+        "timeout": { "startup": 120000 }
+      }
+    }
+  }
+}
+```
+
+The nesting matters: OpenCode keeps server entries under `mcp.servers`. The
+deprecated shape that puts a server directly under `mcp` rejects `codemode`
+and an object `timeout`, and OpenCode then skips the entry as malformed while
+still listing every other server — so a misplaced block looks like "Strix
+never connected" rather than a config error. `mcp/install_mcp.py` writes the
+correct shape and removes the old one.
+
+For a generic client, the command is simply:
+
+```bash
+<repo>/.venv/bin/python <repo>/mcp/server.py
+```
+
+It speaks MCP over stdio. Logs go to stderr.
+
+Copy-ready shapes live next to the server: `mcp/opencode.json.example` (the
+`mcp.servers` nesting above) and `mcp/mcp_config.json.example` (Antigravity's
+`mcpServers` shape, using `${workspaceFolder}`). Point either at your own
+absolute paths; do not commit them — `setup.ps1` writes the real files, and
+both `opencode.json` and `.agents/mcp_config.json` are gitignored because they
+contain machine-specific paths.
+
+## Run a scan
+
+Inside OpenCode:
+
+```text
+/runscan https://staging.example.com standard
+```
+
+The command hands the target to the `pentest` agent, which drives the engine
+per its system prompt. From a terminal, with no interactive session:
+
+```bash
+scripts/runscan-agent.sh https://staging.example.com standard
+```
+
+```powershell
+./scripts/runscan-agent.ps1 -Target https://staging.example.com -Mode standard
+```
+
+Both wrappers preflight Docker and the venv, set the scan mode, invoke
+`opencode run --agent pentest --auto`, and print the newest run directory.
+The model is whatever the host agent is configured with; no `--llm` or API key
+is passed to Strix.
+
+## Tool surface
+
+The server exposes 37 tools. They are thin wrappers over engine code, not
+reimplementations.
+
+| Group | Tools |
+|---|---|
+| Execution | `sandbox_health`, `sandbox_exec`, `sandbox_read_file`, `sandbox_write_file`, `browser`, `sandbox_stop` |
+| Traffic | `proxy_list_requests`, `proxy_view_request`, `proxy_repeat_request`, `proxy_list_sitemap`, `proxy_view_sitemap_entry`, `proxy_scope_rules` |
+| Knowledge | `skill_list`, `skill_load` |
+| Shared state | `note_*` (5), `todo_*` (6), `coverage_*` (3), `threat_model_*` (3) |
+| Findings | `report_finding`, `report_list`, `report_get`, `report_update`, `report_delete`, `finish_report` |
+
+Each tool's docstring is the contract: the threat model enforces a 400-character
+minimum with four required sections and 80-character amendments; coverage
+demands evidence for `ruled_out`, `not_applicable` and `needs_follow_up`;
+duplicate findings on the same endpoint come back as `duplicate_of` instead of
+a second record.
+
+## What runs underneath
+
+| Surface | Engine component |
+|---|---|
+| Container lifecycle, workspace, Caido bootstrap | `strix.runtime.session_manager` |
+| Proxy history, HTTPQL search, replay, sitemap, scope | `strix.tools.proxy.tools` |
+| In-sandbox Chromium | `strix.tools.browser` (agent-browser CLI) |
+| Skill registry and loading | `strix.skills` (65 public packs) |
+| Notes, coverage, threat model, todos | `strix.tools.{notes,coverage,threat_model,todo}.tools` |
+| Finding schema, dedupe, severity checks, SARIF | `strix.report.state.ReportState` |
+
+## Parity matrix
+
+| Capability | Native `strix` run | Agentic mode | Fidelity |
+|---|---|---|---|
+| Sandbox provisioning and toolbelt | Engine runtime | Same runtime via MCP | Identical |
+| Proxy capture, replay, sitemap, scope | Engine proxy tools | Same tools | Identical |
+| Browser automation | Engine browser tool | Same tool | Identical |
+| Skills (65 packs) | Engine registry | Same registry | Identical |
+| Threat model, notes, todos, coverage | Engine stores + `.state` | Same stores, same files | Identical |
+| Finding schema and severity normalization | `ReportState` | Same class | Identical |
+| Canonical artifacts (`vulnerabilities/*.md`, `.json`, `.csv`, `findings.sarif`, `coverage.json`, `run.json`) | Engine writers | Same writers | Identical |
+| Final `penetration_test_report.md` | Engine markdown | Engine markdown, enriched summary sections | Same file, richer body |
+| Scan modes (quick/standard/deep) | Selected by CLI flag, enforced by prompt | Selected by env/argument, enforced by prompt | Behavioral parity |
+| Subagent orchestration | `create_agent` graph | Host `task` tool + `strix-*` subagents | Equivalent, host-scheduled |
+| Deduplication | Model-assisted plus deterministic check | Deterministic token-overlap check | Slightly weaker |
+| Token budget, turn caps, provider failover | Engine-owned | Host harness owns the model and its limits | Host-owned |
+| Telemetry (PostHog/Scarf) | Emitted by engine | Not emitted | Intentionally off |
+| TUI, live viewer, interactive approvals | Native UI | Host session transcript | Not applicable |
+| `~/.strix/mcp-servers.json` integrations | Engine connects them | Host harness owns MCP configuration | Not applicable |
+
+**Verdict:** functional parity for every deterministic component and every
+artifact. The model layer is substituted, not removed: the host agent is the
+model. What is genuinely absent is engine-side metering of that model — token
+budgets, provider failover, and compaction are properties of the host — plus
+telemetry, which agentic runs deliberately do not emit. Nothing that can run
+without an LLM key is lost.
+
+## Verify the build
+
+```bash
+# tool inventory + all state/report artifacts, no Docker needed
+.venv/Scripts/python.exe mcp/smoke_test.py
+
+# additionally boots the container and runs sandbox_exec
+.venv/Scripts/python.exe mcp/smoke_test.py --with-sandbox
+
+# confirms the agent definitions load
+opencode debug agents
+```
+
+The smoke test removes `OPENAI_API_KEY` and `STRIX_LLM` from the server's
+environment before starting it, so a pass proves none are used.
+
+To verify the proxy bridge by hand, run one request through the container and
+read it back:
+
+```text
+strix_sandbox_exec  curl -s -o /dev/null -w '%{http_code}' https://example.com/
+strix_proxy_list_requests
+strix_proxy_view_request  <request id>  request
+strix_proxy_repeat_request  <request id>
+```
+
+## Artifacts
+
+Every run writes to `strix_runs/runscan-<timestamp>/`:
+
+- `penetration_test_report.md` — the report handed to the operator
+- `vulnerabilities/vuln-*.md`, `vulnerabilities.json`, `vulnerabilities.csv`
+- `findings.sarif` — SARIF 2.1.0, including coverage rows as `level: none`
+- `coverage.json`, `run.json` (status, targets, scan config, scan results)
+- `.state/` — notes, coverage, threat model and todos, so a run can resume
+
+## Environment
+
+| Variable | Meaning |
+|---|---|
+| `STRIX_MCP_SCAN_ID` | Sandbox session id (default `runscan`) |
+| `STRIX_MCP_RUNS_DIR` | Artifact root (default `<repo>/strix_runs`) |
+| `STRIX_MCP_SCAN_MODE` | `quick`, `standard` or `deep` (default `deep`) |
+| `STRIX_MCP_INSTRUCTIONS` | Operator instructions recorded in `run.json` |
+| `STRIX_MCP_LOG_LEVEL` | Server log level |
+| `STRIX_IMAGE` | Sandbox image override |
+
+## Troubleshooting
+
+- **The server is missing from `opencode mcp list`.** Check the JSON shape:
+  entries belong under `mcp.servers`, not directly under `mcp`. Run the server
+  by hand to see import errors.
+- **`Connection closed` on startup.** The venv is missing a dependency or the
+  wrong interpreter is configured. Run `.venv/Scripts/python.exe
+  mcp/server.py` and read stderr.
+- **Sandbox health fails.** Start Docker Desktop; if the image is absent, run
+  `setup.ps1` or pull `ghcr.io/usestrix/strix-sandbox`.
+- **Proxy history is empty.** Localhost traffic is not captured. Retry after a
+  few seconds on a fresh container, and use `curl -i` captures as a fallback.
+- **Chromium certificate errors.** Set
+  `AGENT_BROWSER_ARGS="$AGENT_BROWSER_ARGS --ignore-certificate-errors"`.
+
+Only test systems you are authorized to test. The agent's system prompt
+enforces the scope it is given; give it one target and keep everything else
+out of the prompt.

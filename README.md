@@ -71,10 +71,10 @@ Strix are autonomous AI penetration testing agents that act just like real hacke
 - **Bug Bounty Automation** - Automate bug bounty research and generate PoCs for faster reporting
 - **CI/CD Integration** - Run tests in CI/CD to block vulnerabilities before reaching production
 
-## 🤖 Agentic Mode (OpenCode — no LLM keys for Strix)
+## 🤖 Agentic Mode (Antigravity & OpenCode — no LLM keys for Strix)
 
-Run Strix's full pentest muscle directly out of [OpenCode](https://opencode.ai): the OpenCode agent
-(the model you already configured there) becomes the pentest brain, and Strix's Kali sandbox is
+Run Strix's full pentest muscle directly out of **Google Antigravity** or [OpenCode](https://opencode.ai): the agent
+(the model you already configured in your IDE) becomes the pentest brain, and Strix's Kali sandbox is
 exposed as its hands over MCP. **Strix itself needs zero API keys** — `nmap`, `sqlmap`, `ffuf`,
 `chromium` and friends run in the sandbox container, driven by plain MCP tool calls.
 
@@ -85,45 +85,71 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -SeedTestSite
 ```
 
 That script verifies Docker, creates the Python venv, pulls the sandbox image
-(`ghcr.io/usestrix/strix-sandbox`), registers the MCP server in the project's `opencode.json`,
-and (with `-SeedTestSite`) starts a legal local pentest target (OWASP Juice Shop) on
-<http://localhost:4321>.
+(`ghcr.io/usestrix/strix-sandbox`), registers the MCP server in both Antigravity's `.agents/mcp_config.json`
+and OpenCode's `opencode.json`, and (with `-SeedTestSite`) starts a legal local pentest target
+(OWASP Juice Shop) on <http://localhost:4321>.
 
 ### Run a scan
 
-Open this folder in OpenCode and type:
+Open this folder in **Google Antigravity IDE** or **OpenCode** and type:
 
 ```
 /runscan http://localhost:4321
 ```
 
-The `pentest` agent (`.opencode/agents/pentest.md`) will:
+The `runscan` / `pentest` agent (`.agents/skills/runscan/SKILL.md` in Antigravity or `.opencode/agents/pentest.md` in OpenCode) will:
 
-1. health-check the sandbox (`strix_sandbox_health`),
-2. recon + map the target (`strix_sandbox_exec`: nmap, curl, httpx, katana...),
+1. health-check the sandbox (`strix_sandbox_health` / `sandbox_health`),
+2. read or derive the shared threat model, then recon and map the target
+   (`strix_sandbox_exec`: nmap, curl, httpx, katana...),
 3. **create its own account** through the real UI (`strix_browser` → Chromium) if the app
-   requires one, using throwaway credentials,
-4. probe for vulnerabilities, capture evidence, and record each finding with
-   `strix_report_finding`,
-5. write `strix_runs/runscan-*/penetration_test_report.md` and hand you a summary.
+   requires one, using throwaway credentials, and a second one for access-control tests,
+4. test in priority order (authz → injection → business logic → client-side), capturing
+   every exchange through the engine proxy (`strix_proxy_view_request`), recording
+   coverage as it goes, and filing only confirmed findings (`strix_report_finding`),
+5. reconcile the coverage ledger, then write
+   `strix_runs/runscan-*/penetration_test_report.md` and hand you a summary.
 
-Point it at your own site only when you are authorized to test it.
+Prefer the terminal? The same run works headlessly:
+
+```powershell
+./scripts/runscan-agent.ps1 -Target https://staging.example.com -Mode standard
+```
+
+```bash
+scripts/runscan-agent.sh https://staging.example.com standard
+```
 
 ### How the pieces fit
 
 ```
-OpenCode agent (your selected model)          this repo / MCP          Docker
-─────────────────────────────────            ───────────────          ──────
-/runscan <target>  ─►  pentest agent  ─►  strix_sandbox_exec ─►  Kali sandbox container
-                        (brain, no keys)  strix_browser            (nmap, sqlmap, chromium,
-                                          strix_report_finding      Caido proxy...)
-                                          strix_finish_report  ─►  strix_runs/runscan-*/report.md
+Antigravity / OpenCode Agent                  this repo / MCP          Docker
+────────────────────────────                  ───────────────          ──────
+/runscan <target>  ─►  pentest agent    ─►  strix_sandbox_exec  ─►  Kali sandbox container
+                        (brain, no keys)     strix_browser            (nmap, sqlmap, chromium,
+                                             strix_proxy_*             Caido proxy...)
+                                             strix_coverage_*
+                                             strix_report_finding
+                                             strix_finish_report  ─►  strix_runs/runscan-*/report.md
 ```
 
-Files: `mcp/server.py` (the MCP stdio server — tools: `sandbox_health`, `sandbox_exec`,
-`sandbox_write_file`, `sandbox_read_file`, `browser`, `report_finding`, `finish_report`,
-`sandbox_stop`), `.opencode/agents/pentest.md` (the brain), `.opencode/commands/runscan.md`
-(the slash command), `mcp/smoke_test.py` (transport smoke test).
+The MCP server exposes **37 tools**: the sandbox and browser, the Caido proxy
+(history, raw view, replay, sitemap, scope), the 65 engine skill packs, notes,
+todos, the coverage ledger, the threat model, and the full finding lifecycle.
+All of them are thin wrappers over the shipped engine code — the only part of
+Strix replaced by the host agent is the model itself.
+
+Files: `mcp/server.py` (MCP stdio server), `mcp/smoke_test.py` (parity check —
+runs without Docker, `--with-sandbox` includes the container),
+`mcp/install_mcp.py` (registers the server with OpenCode and Antigravity),
+`.opencode/agents/pentest.md` (OpenCode brain), `.opencode/agents/strix-*.md`
+(recon, web, API, validation and report subagents),
+`.opencode/commands/runscan.md` (slash command), `scripts/runscan-agent.{ps1,sh}`
+(headless runners), `.agents/skills/runscan/SKILL.md` + `.agents/mcp_config.json`
+(Antigravity). The parity matrix, including what is host-owned rather than
+engine-owned, is in [docs/integrations/agentic-mode.mdx](docs/integrations/agentic-mode.mdx).
+
+Point it at your own site only when you are authorized to test it.
 
 ## 🚀 Quick Start
 

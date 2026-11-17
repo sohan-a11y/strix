@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "strix": {
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "${workspaceFolder}/mcp/server.py"
+      ],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}

@@ -238,6 +238,12 @@ ignore = [
 "tests/test_codex_auth.py" = ["S105", "S106", "SLF001"]
 # Hatchling loads the build hook by path, not as an importable package.
 "scripts/tui_sidecar_hook.py" = ["INP001"]
+# The MCP server and installer are stdio/CLI entrypoints run as scripts, not a
+# package; the installer reports to the terminal on purpose. Engine imports stay
+# inside the tools so the run's state dir is hydrated before they touch it.
+"mcp/server.py" = ["INP001", "T201", "PLC0415", "PLW0603", "DTZ005", "PLR0912", "PLR0915"]
+"mcp/install_mcp.py" = ["INP001", "T201"]
+"mcp/smoke_test.py" = ["INP001", "T201", "PLR0915"]
 # Stdlib HTTP handler overrides (do_GET/do_POST).
 "strix/interface/auth_cli.py" = ["N802"]
 "tests/test_codex_streaming.py" = ["N802"]

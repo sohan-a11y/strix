@@ -4,10 +4,16 @@
     "servers": {
       "strix": {
         "type": "local",
-        "command": ["<absolute-path-to-repo>/.venv/Scripts/python.exe", "<absolute-path-to-repo>/mcp/server.py"],
-        "cwd": "<absolute-path-to-repo>",
+        "command": [
+          "C:\\path\\to\\repo\\.venv\\Scripts\\python.exe",
+          "C:\\path\\to\\repo\\mcp\\server.py"
+        ],
+        "cwd": "C:\\path\\to\\repo",
         "codemode": false,
-        "timeout": { "startup": 120000 }
+        "timeout": {
+          "startup": 120000
+        },
+        "enabled": true
       }
     }
   }
