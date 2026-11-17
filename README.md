@@ -139,15 +139,27 @@ todos, the coverage ledger, the threat model, and the full finding lifecycle.
 All of them are thin wrappers over the shipped engine code — the only part of
 Strix replaced by the host agent is the model itself.
 
+### Two agents, one engine
+
+- `/runscan <target> [mode]` → **`pentest`**: drives Strix's own Kali toolbelt.
+- `/runz4nzu <target> [mode]` → **`Z4nzu`**: selects real tools from the
+  [Z4nzu/hackingtool](https://github.com/Z4nzu/hackingtool) catalog (219 tools,
+  21 categories) cloned into the *same* sandbox at runtime. Same authorization
+  gate, evidence bar, coverage ledger and Strix reporting; different tool
+  selection. It never invents a tool or command, and never uses hackingtool's
+  own AI layer — the host agent is the brain. DDOS, phishing, wireless capture,
+  RAT/persistence and credential-capture categories are excluded by default.
+
 Files: `mcp/server.py` (MCP stdio server), `mcp/smoke_test.py` (parity check —
 runs without Docker, `--with-sandbox` includes the container),
 `mcp/install_mcp.py` (registers the server with OpenCode and Antigravity),
-`.opencode/agents/pentest.md` (OpenCode brain), `.opencode/agents/strix-*.md`
-(recon, web, API, validation and report subagents),
-`.opencode/commands/runscan.md` (slash command), `scripts/runscan-agent.{ps1,sh}`
-(headless runners), `.agents/skills/runscan/SKILL.md` + `.agents/mcp_config.json`
-(Antigravity). The parity matrix, including what is host-owned rather than
-engine-owned, is in [docs/integrations/agentic-mode.mdx](docs/integrations/agentic-mode.mdx).
+`.opencode/agents/pentest.md` + `.opencode/agents/Z4nzu.md` (OpenCode brains),
+`.opencode/agents/strix-*.md` (recon, web, API, validation and report subagents),
+`.opencode/commands/runscan.md` + `runz4nzu.md` (slash commands),
+`scripts/runscan-agent.{ps1,sh}` (headless runners),
+`.agents/skills/runscan/SKILL.md` + `.agents/mcp_config.json` (Antigravity).
+The parity matrix, including what is host-owned rather than engine-owned, is in
+[docs/integrations/agentic-mode.mdx](docs/integrations/agentic-mode.mdx).
 
 Point it at your own site only when you are authorized to test it.
 

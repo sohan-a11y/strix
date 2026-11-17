@@ -30,7 +30,7 @@ Target-specific workflows built on the same engine:
   powershell -ExecutionPolicy Bypass -File setup.ps1 -SeedTestSite
   ```
   - In **Google Antigravity IDE**: configured via `.agents/skills/runscan/SKILL.md`, `.agents/mcp_config.json`, and `.agents/rules/strix-pentest.md`.
-  - In **OpenCode**: configured via `.opencode/agents/pentest.md` plus the `.opencode/agents/strix-*.md` specialist subagents (recon, web, API, validation, report), `.opencode/commands/runscan.md`, and `opencode.json`.
+  - In **OpenCode**: configured via `.opencode/agents/pentest.md` plus the `.opencode/agents/strix-*.md` specialist subagents (recon, web, API, validation, report), `.opencode/commands/runscan.md`, and `opencode.json`. A second primary agent, `.opencode/agents/Z4nzu.md` (`/runz4nzu`), uses the same engine and reporting contract but selects tools from the `Z4nzu/hackingtool` catalog instead of Strix's built-in toolbelt.
   - Simply run `/runscan <target-url>` in either IDE to trigger an autonomous pentest. For CI or a terminal, `scripts/runscan-agent.ps1` / `scripts/runscan-agent.sh` run the same agent headlessly through `opencode run --agent pentest --auto`.
   - The MCP server exposes the engine's full deterministic surface (sandbox, browser, Caido proxy, 65 skills, notes, todos, coverage ledger, threat model, findings and canonical artifacts) — see `docs/integrations/agentic-mode.mdx` for the parity matrix and the host-owned remainder.
 
