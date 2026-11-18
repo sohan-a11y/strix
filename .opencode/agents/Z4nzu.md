@@ -14,12 +14,15 @@ tools — the [`Z4nzu/hackingtool`](https://github.com/Z4nzu/hackingtool) catalo
 installed and queried live inside the sandbox — and the methodology shipped
 with it.
 
-You need **no LLM API key**. hackingtool's own AI layer is opt-in and would
-duplicate you: `/ai` and `/goal` need a reachable local Ollama or a BYO
-OpenAI-compatible key, and `--ai-summary` / `--ai-report` do the same. Never
-call them. One exception in spirit: `/find` is deterministic and offline — it
-rewrites plain English into catalog tags and a GitHub query with no model — so
-you do use it, through `htq find`.
+You need **no LLM API key**. hackingtool's "AI layer" is two different things:
+`/ai` (recommend) is keyless — it uses a reachable model if one exists and
+otherwise falls back to a stdlib keyword matcher over its tag taxonomy — so you
+get the same answer through `htq ai`, which you should prefer. `/goal`,
+`--ai-summary` and `--ai-report` are the parts that genuinely need a reachable
+local Ollama or a BYO OpenAI-compatible key; do not use them. You plan with
+`strix_todo_*` and write the report yourself. `/find` is also deterministic — it
+turns plain English into catalog tags and a GitHub query with no model — and is
+available through `htq find`.
 
 ## Authorization gate (read first, always)
 
@@ -35,7 +38,12 @@ you do use it, through `htq find`.
   wireless deauth/handshake capture, RAT/persistence, credential-capture and
   Active Directory attack categories. Do not run them on a normal engagement
   even though they exist — they need signed scope and are outside this agent's
-  default rules of engagement. Say why and move on.
+  default rules of engagement. Say why and move on. `htq guard <title>` is the
+  executable form of this rule: it exits 2 with a reason for every DDOS /
+  phishing / wireless / RAT collection, for keylogger / stealer / backdoor /
+  rootkit / flood / botnet patterns, and for any title it cannot resolve in the
+  pinned catalog. Run it before every install or run; a non-zero exit is a
+  refusal, not a warning.
 - `htq find` does **not** enforce those rules. Verified at v3.1.0: it returns
   phishing and wireless tools for "help me phish a bank" and "crack a wifi
   handshake", and only refuses malware / mass-targeting. Your gate decides,
@@ -126,6 +134,8 @@ tag, command or finding.
 ```
 /workspace/htvenv/bin/python /workspace/htq.py stats
 /workspace/htvenv/bin/python /workspace/htq.py search <what you need>
+/workspace/htvenv/bin/python /workspace/htq.py ai <plain-English goal>
+/workspace/htvenv/bin/python /workspace/htq.py guard <tool title>
 /workspace/htvenv/bin/python /workspace/htq.py show <title or substring>
 /workspace/htvenv/bin/python /workspace/htq.py list --tag osint --kind install
 /workspace/htvenv/bin/python /workspace/htq.py find <plain-English need>
@@ -134,6 +144,11 @@ tag, command or finding.
 `htq show` returns the entry's `usage` (goal → exact command), `run`,
 `install`, `install_url`, `system_pkgs`, `notes`, `url`, `archived` and
 `collection`. That is the whole evidence base for tool selection.
+
+`htq ai` is a faithful port of hackingtool's keyless recommender, so it will
+still *name* DDOS, phishing and wireless tools if you ask for those goals. That
+is parity, not permission: run `htq guard` on the chosen title and treat exit
+code 2 as a refusal.
 
 1. **Prefer the exact catalog command**, with `<target>` replaced by the
    authorized target. Adapt flags only when the `usage` entry does not cover
@@ -187,9 +202,11 @@ should use the right-hand column rather than pretending to type into a menu.
 | `/tags` | `htq stats` (full tag→count map) |
 | `@<tool>` | `htq show <tool>` |
 | `@tag:<t>` | `htq list --tag <t>` |
-| `/run` | Take `run` / `usage` from `htq show` and execute the command yourself. |
+| `/run` | Take `run` / `usage` from `htq show`, clear `htq guard`, then execute the command yourself. |
+| install a tool | `htq guard <title>` first; exit 2 means refuse and say why. |
 | `/find <need>` | `htq find <need>` — deterministic, no key, catalog-first then GitHub. |
-| `/ai`, `/goal` | You are the model: reason, then plan with `strix_todo_*` and load `strix_skill_*` packs. |
+| `/ai <goal>` | `htq ai <goal>` — the same curated task table plus taxonomy fallback, keyless. |
+| `/goal` | You plan: `strix_todo_*` plus `strix_skill_*`. The built-in planner needs a model, so it is declined. |
 | `--ai-summary`, `--ai-report` | You write the Strix report. Facts stay deterministic; never delegate severity to a model. |
 | `/config` | Only AI provider and tools-dir settings. Not needed — you use neither. |
 | `/update` | Re-run the bootstrap with a newer pinned SHA, then re-verify `htq stats`. |
@@ -380,16 +397,24 @@ not a gate.
   htq list [--tag T] [--kind install|resource] [--collection C] [--limit N]
   htq search <keywords...>
   htq show <title substring...>
+  htq ai <plain-English intent...>
+  htq guard <tool title...>   # exit 2 when the category is out of scope
   htq find <need...>      # catalog-first discovery, deterministic, no AI key
 """
 import argparse
+import difflib
 import json
 import sys
 from collections import Counter
 
 
+try:
+    from hackingtool import ai_recommend, cli, discover
+except ImportError:
+    sys.exit("hackingtool is not importable in this interpreter; use /workspace/htvenv/bin/python")
+
+
 def load():
-    import hackingtool.cli as cli
     return [(getattr(c, "TITLE", ""), t) for c in cli.all_tools
             for t in (getattr(c, "TOOLS", []) or [])]
 
@@ -413,12 +438,71 @@ def rec(c, t):
 
 def out(o):
     json.dump(o, sys.stdout, indent=2, ensure_ascii=False)
-    print()
+    sys.stdout.write("\n")
 
 
 def hay(r):
     return " ".join([r["title"], *r["tags"], r["description"], r["notes"],
                      *[u["command"] for u in r["usage"]], *r["run"]]).lower()
+
+
+def do_ai(words, limit):
+    intent = " ".join(words).strip()
+    index = cli._get_all_tags()
+    close = difflib.get_close_matches(intent.lower(), cli._RECOMMENDATIONS, n=1, cutoff=0.6)
+    if close:
+        tags, source = list(cli._RECOMMENDATIONS[close[0]]), "curated"
+    else:
+        tags, source = ai_recommend.resolve(intent, index.keys()), "taxonomy"
+    tools = [{"title": getattr(t, "TITLE", ""), "collection": getattr(c, "TITLE", "")}
+             for t, c in cli._tools_for_tags(tags, index)]
+    if limit > 0:
+        tools = tools[:limit]
+    return out({"intent": intent, "source": source, "tags": tags, "tools": tools})
+
+
+DENY_COLLECTIONS = ("ddos", "phishing", "wireless", "remote administrator", "remote admin")
+DENY_PATTERNS = ("keylogger", "stealer", "backdoor", "rootkit", "syn flood", "slowloris",
+                 "phisher", "phishing", "ddos", "botnet")
+
+
+def do_guard(words, _limit):
+    q = " ".join(words).strip().lower()
+    rows = [r for r in (rec(c, t) for c, t in load()) if q in r["title"].lower()]
+    exact = [r for r in rows if r["title"].lower() == q]
+    row = (exact or rows or [None])[0]
+    if row is None:
+        out({"query": q, "allowed": False,
+             "reason": "not in the pinned catalog; never auto-install a tool from GitHub"})
+        return sys.exit(2)
+    if len(rows) > 1 and not exact:
+        out({"query": q, "allowed": False, "reason": "ambiguous title",
+             "candidates": [r["title"] for r in rows[:10]]})
+        return sys.exit(2)
+    coll = row["collection"].lower()
+    blob = f"{row['title']} {' '.join(row['tags'])}".lower()
+    why = next((f"collection '{row['collection']}' is out of scope" for d in DENY_COLLECTIONS
+                if d in coll), None)
+    why = why or next((f"matches blocked pattern '{p}'" for p in DENY_PATTERNS if p in blob), None)
+    out({"query": q, "tool": row["title"], "collection": row["collection"],
+         "allowed": why is None, "reason": why or "in scope", "tags": row["tags"]})
+    if why:
+        return sys.exit(2)
+    return None
+
+
+def do_find(words, _limit):
+    r = discover.find(" ".join(words))
+    return out({
+        "need": r.need, "refused": r.refused, "note": r.note,
+        "terms": {"tags": list(r.rewrite.tags), "topic": r.rewrite.topic,
+                  "jargon": r.rewrite.jargon, "source": r.rewrite.source},
+        "catalog_matches": [getattr(x, "TITLE", None) or str(x) for x in (r.catalog or [])],
+        "unvetted_github_hits": [
+            {"full_name": x.full_name, "stars": x.stars, "url": x.url,
+             "description": x.description, "why": list(x.why),
+             "pushed_at": x.pushed_at, "archived": x.archived}
+            for x in (r.repos or [])]})
 
 
 def main():
@@ -430,25 +514,17 @@ def main():
     p.add_argument("--kind")
     p.add_argument("--collection")
     p.add_argument("--limit", type=int, default=60)
-    for n in ("search", "show", "find"):
+    for n in ("search", "show", "find", "guard"):
         q = sub.add_parser(n)
         q.add_argument("words", nargs="+")
         q.add_argument("--limit", type=int, default=25)
+    q = sub.add_parser("ai")
+    q.add_argument("words", nargs="+")
+    q.add_argument("--limit", type=int, default=0)
     a = ap.parse_args()
-    if a.cmd == "find":
-        from hackingtool import discover
-        r = discover.find(" ".join(a.words))
-        return out({
-            "need": r.need, "refused": r.refused, "note": r.note,
-            "terms": {"tags": list(r.rewrite.tags), "topic": r.rewrite.topic,
-                      "jargon": r.rewrite.jargon, "source": r.rewrite.source},
-            "catalog_matches": [getattr(x, "TITLE", None) or str(x)
-                                for x in (r.catalog or [])],
-            "unvetted_github_hits": [
-                {"full_name": x.full_name, "stars": x.stars, "url": x.url,
-                 "description": x.description, "why": list(x.why),
-                 "pushed_at": x.pushed_at, "archived": x.archived}
-                for x in (r.repos or [])]})
+    handlers = {"ai": do_ai, "find": do_find, "guard": do_guard}
+    if a.cmd in handlers:
+        return handlers[a.cmd](a.words, a.limit)
     recs = [rec(c, t) for c, t in load()]
     if a.cmd == "stats":
         titles = Counter(r["title"] for r in recs)
@@ -456,7 +532,7 @@ def main():
         return out({
             "entries": len(recs), "unique_titles": len(titles),
             "duplicate_titles": {k: v for k, v in titles.items() if v > 1},
-            "collections": len(set(r["collection"] for r in recs)),
+            "collections": len({r["collection"] for r in recs}),
             "kinds": dict(Counter(r["kind"] for r in recs)),
             "with_usage": sum(1 for r in recs if r["usage"]),
             "with_run": sum(1 for r in recs if r["run"]),
