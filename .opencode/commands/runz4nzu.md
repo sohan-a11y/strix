@@ -12,10 +12,13 @@ Run the full autonomous pentest of this exact target per your system prompt:
    exact fix and stop.
 2. Restate the scope, read or derive the threat model, and make a short todo
    plan. Say which scan mode you are using.
-3. Clone the hackingtool catalog into the sandbox (`/workspace/hackingtool`)
-   and read its closed catalog plus the operator methodology. Choose only real
-   tools from it — never invent a tool or command. Do not use hackingtool's own
-   AI layer; you are the brain.
+3. Bootstrap or verify the hackingtool catalog exactly as your prompt says
+   (pinned tarball → `/workspace/hackingtool`, venv `/workspace/htvenv`,
+   adapter `/workspace/htq.py`), then read the operator methodology. Query it
+   with `htq stats|search|show|list|find` and choose only real tools from it —
+   never invent a tool or command. Do not use hackingtool's own AI layer; you
+   are the brain. `htq find` is deterministic and allowed, but its GitHub hits
+   are unvetted: never install or run them without my explicit approval.
 4. Recon and map the surface first. Prefer passive tools before active ones and
    stay inside the hard limits. Delegate to the `strix-*` specialists if the
    `task` tool is available, otherwise work inline.

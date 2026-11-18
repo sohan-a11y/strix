@@ -143,12 +143,15 @@ Strix replaced by the host agent is the model itself.
 
 - `/runscan <target> [mode]` → **`pentest`**: drives Strix's own Kali toolbelt.
 - `/runz4nzu <target> [mode]` → **`Z4nzu`**: selects real tools from the
-  [Z4nzu/hackingtool](https://github.com/Z4nzu/hackingtool) catalog (219 tools,
-  21 categories) cloned into the *same* sandbox at runtime. Same authorization
-  gate, evidence bar, coverage ledger and Strix reporting; different tool
-  selection. It never invents a tool or command, and never uses hackingtool's
-  own AI layer — the host agent is the brain. DDOS, phishing, wireless capture,
-  RAT/persistence and credential-capture categories are excluded by default.
+  [Z4nzu/hackingtool](https://github.com/Z4nzu/hackingtool) catalog, installed
+  from a pinned commit into the *same* sandbox at runtime and queried live
+  (v3.1.0 reports **263 entries across 22 collections**; the registry, not the
+  README's 219, is the truth). Same authorization gate, evidence bar, coverage
+  ledger and Strix reporting; different tool selection. It never invents a tool
+  or command, never uses hackingtool's own AI layer — the host agent is the
+  brain — and never treats the catalog's `/find` output as vetted. DDOS,
+  phishing, wireless capture, RAT/persistence and credential-capture categories
+  are excluded by default even though entries exist.
 
 Files: `mcp/server.py` (MCP stdio server), `mcp/smoke_test.py` (parity check —
 runs without Docker, `--with-sandbox` includes the container),
